@@ -83,6 +83,8 @@ RUN mkdir -p /app/data
 VOLUME "/app/data"
 
 # Runtime Env variables
+# Listen on all interfaces inside the container; the published port decides who can reach it.
+ENV WEB_HOST="0.0.0.0"
 ENV CRON_SCHEDULE="0 0 * * *"
 ENV NODE_OPTIONS="--max-old-space-size=512"
 ENV CLAUDESYNCHRO_DATA_DIR="/app/data/claudesynchro"
