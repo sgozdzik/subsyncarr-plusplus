@@ -160,7 +160,7 @@ class SubsyncarrPlusClient {
 
         // Format time until next run
         const timeUntil = this.formatTimeUntil(diff);
-        scheduleTime.textContent = `${nextRunDate.toLocaleString()} (${timeUntil})`;
+        scheduleTime.textContent = `${window.UI.formatDateTime(nextRunDate)} (${timeUntil})`;
         scheduleTime.title = `Schedule: ${schedule.description}`;
 
         // Update countdown every minute
@@ -579,8 +579,8 @@ class SubsyncarrPlusClient {
 
         return `
         <tr>
-          <td>${new Date(run.start_time).toLocaleString()}</td>
-          <td><span class="status-badge ${run.status}">${run.status}</span></td>
+          <td>${window.UI.formatDateTime(run.start_time)}</td>
+          <td><span class="status-badge ${run.status}">${run.status}</span>${run.source && run.source !== 'scheduled' ? ` <span class="run-source">${run.source === 'library' ? 'Library' : 'manual'}</span>` : ''}</td>
           <td>${run.total_files}</td>
           <td>${completedCell}</td>
           <td>${skippedCell}</td>
@@ -690,5 +690,5 @@ if (document.readyState === 'loading') {
   });
 } else {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  client = new SubsyncarrClient();
+  client = new SubsyncarrPlusClient();
 }

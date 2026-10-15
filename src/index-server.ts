@@ -1,9 +1,14 @@
+import { captureConsole } from './debugLog';
 import { ProcessingEngine } from './processingEngine';
 import { StateManager } from './stateManager';
 import { ProcessingCoordinator } from './coordinator';
 import { SubsyncarrPlusServer } from './server';
-import { schedule } from 'node-cron';
 import { getRetentionConfig } from './config';
+import { Scheduler } from './scheduler';
+import { Library } from './library';
+
+// Keep recent log lines for the Diagnostics page.
+captureConsole();
 
 async function main() {
   const dbPath = process.env.DB_PATH || '/app/data/subsyncarr-plus.db';
@@ -15,28 +20,22 @@ async function main() {
   const stateManager = new StateManager(dbPath);
   const engine = new ProcessingEngine();
   const coordinator = new ProcessingCoordinator(engine, stateManager);
-  const server = new SubsyncarrPlusServer(coordinator, stateManager);
+  // Scheduled runs: daily time set in the UI (Warsaw time) or CRON_SCHEDULE
+  const scheduler = new Scheduler(stateManager.settings, async () => {
+    console.log(`[${new Date().toISOString()}] Starting scheduled run`);
+    try {
+      await coordinator.startRun({ source: 'scheduled' });
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] Scheduled run failed:`, error);
+    }
+  });
+  scheduler.apply();
+
+  const library = new Library(stateManager);
+  const server = new SubsyncarrPlusServer(coordinator, stateManager, scheduler, library, dbPath);
 
   // Start HTTP server
   server.start(port, host);
-
-  // Setup cron scheduler for automatic runs
-  const cronSchedule = process.env.CRON_SCHEDULE || '0 0 * * *';
-
-  if (cronSchedule !== 'disabled') {
-    schedule(cronSchedule, async () => {
-      console.log(`[${new Date().toISOString()}] Starting scheduled run (${cronSchedule})`);
-      try {
-        await coordinator.startRun();
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] Scheduled run failed:`, error);
-      }
-    });
-
-    console.log(`[${new Date().toISOString()}] Scheduled runs: ${cronSchedule}`);
-  } else {
-    console.log(`[${new Date().toISOString()}] Automatic scheduling disabled`);
-  }
 
   // Setup periodic database cleanup
   const retentionConfig = getRetentionConfig();

@@ -1,18 +1,21 @@
 import EventEmitter from 'events';
-import { SubsyncarrPlusDatabase, Run, FileResult } from './database';
+import { SubsyncarrPlusDatabase, Run, FileResult, RunSource } from './database';
 import { randomUUID } from 'crypto';
 import { LogFileManager } from './logFileManager';
 import * as path from 'path';
 import { ALL_ENGINES } from './engines';
+import { SettingsStore } from './settings';
 
 export class StateManager extends EventEmitter {
   private db: SubsyncarrPlusDatabase;
   private currentRunId: string | null = null;
   private logFileManager: LogFileManager;
+  public readonly settings: SettingsStore;
 
   constructor(dbPath: string) {
     super();
     this.db = new SubsyncarrPlusDatabase(dbPath);
+    this.settings = new SettingsStore(this.db);
 
     // Create log file manager in same directory as database
     const logDir = path.join(path.dirname(dbPath), 'logs');
@@ -37,9 +40,9 @@ export class StateManager extends EventEmitter {
   }
 
   // Run management
-  startRun(totalFiles: number, enabledEngines: string[] = ALL_ENGINES): string {
+  startRun(totalFiles: number, enabledEngines: string[] = ALL_ENGINES, source: RunSource = 'scheduled'): string {
     const runId = randomUUID();
-    this.db.createRun(runId, totalFiles);
+    this.db.createRun(runId, totalFiles, source);
 
     // Set the total number of engines that will run (total_files * enabled_engines)
     const totalEngines = totalFiles * enabledEngines.length;
@@ -130,6 +133,7 @@ export class StateManager extends EventEmitter {
       stdout?: string;
       stderr?: string;
       skipped?: boolean;
+      cancelled?: boolean;
     },
   ): void {
     const files = this.db.getFileResults(runId);
@@ -143,13 +147,18 @@ export class StateManager extends EventEmitter {
         engines: JSON.stringify(engines),
       });
 
-      // Update failure tracking
-      if (result.skipped) {
-        // Skipped engines don't affect failure count
+      // Update failure tracking (skipped and cancelled engines don't affect the failure count)
+      const details = {
+        message: result.message,
+        details: result.success ? undefined : (result.stderr || result.stdout || '').slice(-4000) || undefined,
+        durationMs: result.duration,
+      };
+      if (result.skipped || result.cancelled) {
+        // nothing to record
       } else if (result.success) {
-        this.db.recordEngineSuccess(filePath, engine);
+        this.db.recordEngineSuccess(filePath, engine, details);
       } else {
-        this.db.recordEngineFailure(filePath, engine);
+        this.db.recordEngineFailure(filePath, engine, this.settings.maxFailures(), details);
       }
 
       this.emitFileUpdate(runId, filePath);
@@ -211,12 +220,13 @@ export class StateManager extends EventEmitter {
 
   // Engine skip logic methods
   getSkippedEngines(filePath: string): string[] {
-    return this.db.getAllSkippedEngines(filePath);
+    return this.db.getAllSkippedEngines(filePath, this.settings.maxFailures());
   }
 
+  /** Engines that failed `maxFailures` times in a row are only run when the file is picked manually. */
   shouldSkipEngine(filePath: string, engine: string): boolean {
     const tracking = this.db.getEngineFailureTracking(filePath, engine);
-    return tracking ? tracking.is_skipped : false;
+    return tracking ? tracking.consecutive_failures >= this.settings.maxFailures() : false;
   }
 
   resetSkipStatus(filePath: string, engine?: string): void {
@@ -224,7 +234,7 @@ export class StateManager extends EventEmitter {
   }
 
   getFailureStats() {
-    return this.db.getFailureTrackingStats();
+    return this.db.getFailureTrackingStats(this.settings.maxFailures());
   }
 
   close() {

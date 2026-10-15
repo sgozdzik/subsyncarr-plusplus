@@ -1,23 +1,38 @@
-import { ProcessingEngine } from './processingEngine';
+import { ProcessingEngine, RunRequest } from './processingEngine';
 import { StateManager } from './stateManager';
-import { ScanConfig } from './config';
 import { findMatchingVideoFile } from './findMatchingVideoFile';
-import { Run } from './database';
+import { Run, RunSource } from './database';
 import { once } from 'events';
-import { getEnabledEngines } from './engines';
+import { ALL_ENGINES, getEnabledEngines } from './engines';
+
+const MAX_QUEUED_RUNS = 20;
+
+export interface SubmitResult {
+  runId?: string;
+  queued?: boolean;
+  position?: number;
+}
+
+/** Engines for a request, in the canonical order; unknown names are ignored. */
+export function resolveEngines(requested?: string[]): string[] {
+  if (!requested || requested.length === 0) {
+    return getEnabledEngines();
+  }
+  return ALL_ENGINES.filter((engine) => requested.includes(engine));
+}
 
 export class ProcessingCoordinator {
   private processingPromise: Promise<void> | null = null;
-  private enabledEngines: string[];
+  private currentEngines: string[] = getEnabledEngines();
+  private currentSource: RunSource = 'scheduled';
   private currentRunId: string | null = null;
   private stopRequested: boolean = false;
+  private queue: RunRequest[] = [];
 
   constructor(
     private engine: ProcessingEngine,
     private stateManager: StateManager,
   ) {
-    this.enabledEngines = getEnabledEngines();
-
     // Inject stateManager into engine so it can check skip status
     this.engine.stateManager = this.stateManager;
 
@@ -32,7 +47,7 @@ export class ProcessingCoordinator {
     });
 
     this.engine.on('run:files_found', (files: string[]) => {
-      this.currentRunId = this.stateManager.startRun(files.length, this.enabledEngines);
+      this.currentRunId = this.stateManager.startRun(files.length, this.currentEngines, this.currentSource);
 
       // Add all files to database as pending
       files.forEach((filePath) => {
@@ -107,16 +122,46 @@ export class ProcessingCoordinator {
     });
   }
 
-  async startRun(config?: ScanConfig): Promise<string> {
+  /** Starts a run now, or queues it behind the run in progress (manual runs). */
+  async submit(request: RunRequest): Promise<SubmitResult> {
+    if (this.processingPromise) {
+      if (this.queue.length >= MAX_QUEUED_RUNS) {
+        throw new Error(`Too many queued runs (${MAX_QUEUED_RUNS})`);
+      }
+      this.queue.push(request);
+      console.log(`[${new Date().toISOString()}] Run queued (${request.source}), position ${this.queue.length}`);
+      return { queued: true, position: this.queue.length };
+    }
+    return { runId: await this.startRun(request) };
+  }
+
+  getQueue(): RunRequest[] {
+    return [...this.queue];
+  }
+
+  private startNextQueued(): void {
+    const next = this.queue.shift();
+    if (next) {
+      setImmediate(() => {
+        this.startRun(next).catch((error) => {
+          console.error(`[${new Date().toISOString()}] Queued run failed to start:`, error);
+        });
+      });
+    }
+  }
+
+  async startRun(request: RunRequest = { source: 'manual' }): Promise<string> {
     if (this.processingPromise) {
       console.log(`[${new Date().toISOString()}] Cannot start run: Another run is already in progress`);
       throw new Error('A run is already in progress');
     }
 
-    console.log(`[${new Date().toISOString()}] Starting new processing run...`);
+    console.log(`[${new Date().toISOString()}] Starting new processing run (${request.source})...`);
     this.engine.reset();
     this.currentRunId = null;
     this.stopRequested = false;
+    this.currentEngines = resolveEngines(request.engines);
+    this.currentSource = request.source;
 
     const ac = new AbortController();
     // Use events.once for cleaner listener handling with AbortSignal support
@@ -127,7 +172,7 @@ export class ProcessingCoordinator {
     // Suppress unhandled rejection when we abort this promise
     runStartedPromise.catch(() => {});
 
-    const processPromise = this.engine.processRun(config);
+    const processPromise = this.engine.processRun(request, this.currentEngines);
 
     this.processingPromise = processPromise.finally(() => {
       this.processingPromise = null;
@@ -139,6 +184,7 @@ export class ProcessingCoordinator {
         this.stateManager.completeRun(run.id);
       }
       this.currentRunId = null;
+      this.startNextQueued();
     });
     // Prevent unhandled rejection on the background promise property,
     // as the error is handled by the main startRun awaiter.
@@ -180,6 +226,8 @@ export class ProcessingCoordinator {
 
   stopRun(): void {
     console.log(`[${new Date().toISOString()}] Stop run requested`);
+    // Stopping also drops runs waiting in the queue.
+    this.queue = [];
     const run = this.stateManager.getCurrentRun();
     if (!run) {
       if (this.isRunning()) {

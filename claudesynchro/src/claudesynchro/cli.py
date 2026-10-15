@@ -3,6 +3,7 @@
     claudesynchro sync --video Movie.mkv --subtitle Movie.pl.srt [--output out.srt] [--json]
     claudesynchro probe --video Movie.mkv
     claudesynchro transcribe --video Movie.mkv --output Movie.transcript.srt
+    claudesynchro doctor [--json]
 
 Exit codes for `sync`: 0 written, 2 not written (low confidence), 3 skipped, 1 error.
 With --json the last stdout line is a JSON object with status, message, output and report.
@@ -105,6 +106,84 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dir_size(path: Path) -> int:
+    try:
+        # Hugging Face caches link snapshots to blobs; count real files only.
+        return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+    except OSError:
+        return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Environment check for the Diagnostics page: versions, CPU support, caches, settings."""
+    import dataclasses
+    import importlib.metadata
+    import os
+    import platform
+    import shutil
+
+    from . import __version__
+
+    settings = Settings()
+    info: dict = {
+        "version": __version__,
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "cpu_count": os.cpu_count(),
+        "threads": settings.cpu_threads,
+        "ffmpeg": shutil.which("ffmpeg"),
+        "ffprobe": shutil.which("ffprobe"),
+    }
+    packages = {}
+    for name in ("numpy", "onnxruntime", "ctranslate2", "faster-whisper", "tokenizers", "huggingface-hub", "av"):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[name] = None
+    info["packages"] = packages
+    try:
+        import ctranslate2
+
+        info["whisper_cpu_compute_types"] = sorted(ctranslate2.get_supported_compute_types("cpu"))
+    except Exception as err:  # noqa: BLE001 - reported, not fatal
+        info["whisper_cpu_compute_types"] = f"error: {err}"
+    try:
+        import onnxruntime
+
+        info["onnxruntime_providers"] = onnxruntime.get_available_providers()
+    except Exception as err:  # noqa: BLE001
+        info["onnxruntime_providers"] = f"error: {err}"
+
+    data = settings.data_dir
+    writable = False
+    try:
+        data.mkdir(parents=True, exist_ok=True)
+        probe_file = data / ".write-test"
+        probe_file.write_text("ok")
+        probe_file.unlink()
+        writable = True
+    except OSError:
+        pass
+    info["data_dir"] = {
+        "path": str(data),
+        "writable": writable,
+        "models_mb": round(_dir_size(settings.models_dir) / 1e6, 1),
+        "whisper_models": sorted(p.name for p in (settings.models_dir / "whisper").glob("models--*")),
+        "transcripts_cached": len(list((settings.cache_dir / "transcripts").glob("*.json"))),
+        "reports": len(list(settings.reports_dir.glob("*.json"))),
+    }
+    effective = {k: (str(v) if isinstance(v, Path) else v) for k, v in dataclasses.asdict(settings).items()}
+    if effective.get("openrouter_api_key"):
+        effective["openrouter_api_key"] = "***" + str(effective["openrouter_api_key"])[-4:]
+    info["settings"] = effective
+
+    if args.json:
+        print(json.dumps(info))
+    else:
+        print(json.dumps(info, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="claudesynchro", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -132,6 +211,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", required=True)
     p.add_argument("--whisper-model")
     p.set_defaults(func=cmd_transcribe)
+
+    p = sub.add_parser("doctor", help="check versions, CPU support, caches and settings")
+    p.add_argument("--json", action="store_true", help="single-line JSON")
+    p.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
     return args.func(args)

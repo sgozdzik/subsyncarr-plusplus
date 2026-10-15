@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Settings · Subsyncarr++</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="header-top">
+          <div>
+            <h1>🧬 Subsyncarr++</h1>
+            <p class="subtitle">Settings: saved in the database, they override the container's environment variables</p>
+          </div>
+          <nav id="mainNav" class="main-nav"></nav>
+        </div>
+      </header>
+
+      <form id="settingsForm">
+        <section>
+          <h2>Daily run</h2>
+          <p class="muted">
+            Times are Warsaw time (<span id="tzName">Europe/Warsaw</span>). Now: <strong id="nowWarsaw">-</strong>
+          </p>
+          <div class="form-stack">
+            <label class="radio"
+              ><input type="radio" name="scheduleMode" value="daily" /> Every day at
+              <input type="time" id="scheduleTime" value="03:00" step="60" />
+            </label>
+            <label class="radio"
+              ><input type="radio" name="scheduleMode" value="disabled" /> Disabled (manual runs only)</label
+            >
+            <label class="radio"
+              ><input type="radio" name="scheduleMode" value="env" /> Use <code>CRON_SCHEDULE</code> from the container
+              (<code id="envCron"></code>)</label
+            >
+          </div>
+          <p id="nextRun" class="next-run"></p>
+        </section>
+
+        <section>
+          <h2>Engines for scheduled runs</h2>
+          <p class="muted">
+            Used by the daily run and the dashboard's Start buttons. Files picked in the Library can use any engine.
+            <span id="enginesSource"></span>
+          </p>
+          <div id="engineList" class="form-row"></div>
+        </section>
+
+        <section>
+          <h2>Timeouts</h2>
+          <div class="form-grid">
+            <label for="engineTimeout">ffsubsync, autosubsync, alass</label>
+            <div>
+              <input type="number" id="engineTimeout" min="1" max="1440" /> min
+              <span class="source" id="engineTimeoutSource"></span>
+            </div>
+            <label for="claudesynchroTimeout">claudesynchro</label>
+            <div>
+              <input type="number" id="claudesynchroTimeout" min="1" max="1440" /> min
+              <span class="source" id="claudesynchroTimeoutSource"></span>
+              <div class="muted small">
+                Transcribing a film without English subtitles on a NAS CPU can take a while.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Failure policy</h2>
+          <div class="form-grid">
+            <label for="maxFailures">Stop running an engine for a file after</label>
+            <div>
+              <input type="number" id="maxFailures" min="1" max="100" /> failures in a row
+              <span class="source" id="maxFailuresSource"></span>
+              <div class="muted small">
+                Scheduled runs then skip that engine for that file. Picking the file in the
+                <a href="/library">Library</a> always runs it, and a success resets the count.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <button type="button" id="resetDefaults" class="btn btn-secondary">Reset all to container defaults</button>
+          <button type="submit" class="btn btn-primary">Save settings</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="/common.js"></script>
+    <script src="/settings.js"></script>
+  </body>
+</html>

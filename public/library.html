@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Library · Subsyncarr++</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="header-top">
+          <div>
+            <h1>🧬 Subsyncarr++</h1>
+            <p class="subtitle">Library: every subtitle file in your scan paths</p>
+          </div>
+          <nav id="mainNav" class="main-nav"></nav>
+        </div>
+      </header>
+
+      <div id="runBanner" class="run-banner hidden"></div>
+
+      <section>
+        <div class="library-toolbar">
+          <input id="search" type="search" placeholder="Search files and folders…" />
+          <select id="statusFilter">
+            <option value="all">All files</option>
+            <option value="needs">Not synced by claudesynchro yet</option>
+            <option value="done">Synced by claudesynchro</option>
+            <option value="failed">Failed (any engine)</option>
+            <option value="skipped">Auto-skipped (any engine)</option>
+            <option value="novideo">No matching video</option>
+          </select>
+          <div class="toolbar-actions">
+            <button id="expandAll" class="btn btn-secondary btn-sm">Expand all</button>
+            <button id="collapseAll" class="btn btn-secondary btn-sm">Collapse all</button>
+            <button
+              id="syncMissing"
+              class="btn btn-secondary btn-sm"
+              title="Run claudesynchro on every file that has no claudesynchro result yet (other engines are not run)"
+            >
+              ✨ Sync missing with claudesynchro
+            </button>
+            <button id="rescan" class="btn btn-primary btn-sm" title="Scan the folders again">⟳ Refresh</button>
+          </div>
+        </div>
+        <div id="libraryInfo" class="library-info">Loading…</div>
+        <div class="engine-legend">
+          <span><span class="pill pill-done">✓</span> synced</span>
+          <span><span class="pill pill-failed">✗</span> failed (count)</span>
+          <span
+            ><span class="pill pill-auto-skipped">⊘</span> auto-skipped after repeated failures (runs only when picked
+            here)</span
+          >
+          <span><span class="pill pill-not-run">·</span> not run yet</span>
+          <span><span class="pill pill-n-a">–</span> not applicable</span>
+          <span
+            ><strong>F</strong> ffsubsync · <strong>Au</strong> autosubsync · <strong>Al</strong> alass ·
+            <strong>Cs</strong> claudesynchro</span
+          >
+        </div>
+        <div id="tree" class="tree"></div>
+      </section>
+    </div>
+
+    <div id="selectionBar" class="selection-bar hidden">
+      <div class="selection-inner">
+        <strong id="selectionCount"></strong>
+        <div id="engineChoices" class="engine-choices"></div>
+        <label class="checkbox" title="Run engines again even if their result file already exists"
+          ><input type="checkbox" id="forceRun" /> Re-create existing results</label
+        >
+        <div class="selection-actions">
+          <button id="clearSelection" class="btn btn-secondary btn-sm">Clear</button>
+          <button id="runSelected" class="btn btn-primary btn-sm">▶ Run selected</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="detailsModal" class="modal hidden">
+      <div class="modal-content details-modal">
+        <div class="modal-header">
+          <h3 id="detailsTitle">File</h3>
+          <button class="btn-close" data-close>&times;</button>
+        </div>
+        <div id="detailsBody" class="details-body"></div>
+        <div class="modal-actions">
+          <button id="detailsCopy" class="btn btn-secondary">📋 Copy debug info</button>
+          <button id="detailsReset" class="btn btn-secondary">Reset failures</button>
+          <button id="detailsRun" class="btn btn-primary">▶ Run now</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/common.js"></script>
+    <script src="/library.js"></script>
+  </body>
+</html>

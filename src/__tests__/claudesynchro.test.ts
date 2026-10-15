@@ -38,7 +38,9 @@ describe('claudesynchro helpers', () => {
   });
 
   it('skips subtitles in other languages without starting Python', async () => {
-    const result = await generateClaudesynchroSubtitles('/movies/Movie (2024)/Movie (2024).en.srt', video);
+    const result = await generateClaudesynchroSubtitles('/movies/Movie (2024)/Movie (2024).en.srt', video, {
+      timeoutMs: 1000,
+    });
     expect(result.skipped).toBe(true);
     expect(result.message).toContain('"en"');
   });

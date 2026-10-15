@@ -1,8 +1,7 @@
-import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { existsSync, openSync, readSync, closeSync } from 'fs';
 import { basename, dirname, extname, join } from 'path';
-import { ProcessingResult } from './helpers';
+import { EngineOptions, ProcessingResult, runProcess } from './helpers';
 
 // Language tags as they appear in subtitle file names (Plex/Jellyfin/Bazarr conventions).
 const LANGUAGE_GROUPS: [string, string[]][] = [
@@ -107,7 +106,7 @@ interface ClaudesynchroJson {
 export async function generateClaudesynchroSubtitles(
   srtPath: string,
   videoPath: string,
-  onLog?: (line: string) => void,
+  options: EngineOptions,
 ): Promise<ProcessingResult> {
   const lang = subtitleLanguageTag(srtPath, videoPath);
   const languages = claudesynchroLanguages();
@@ -120,66 +119,44 @@ export async function generateClaudesynchroSubtitles(
   }
 
   const outputPath = claudesynchroOutputPath(srtPath, videoPath);
-  if (existsSync(outputPath)) {
+  if (!options.force && existsSync(outputPath)) {
     return { success: true, message: `Skipping ${outputPath} - already processed`, skipped: true };
   }
 
-  const timeout = parseInt(process.env.CLAUDESYNCHRO_TIMEOUT_MS || '10800000', 10);
   const args = ['sync', '--video', videoPath, '--subtitle', srtPath, '--output', outputPath, '--json'];
   console.log(
     `${new Date().toLocaleString()} Processing: claudesynchro ${args.map((a) => JSON.stringify(a)).join(' ')}`,
   );
+  const outcome = await runProcess('claudesynchro', args, options);
+  const stderr = outcome.stderr || undefined;
 
-  return new Promise((resolve) => {
-    const child = spawn('claudesynchro', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    let pending = '';
-    let timedOut = false;
+  if (outcome.cancelled) {
+    return { success: false, cancelled: true, message: 'Cancelled: claudesynchro', stderr };
+  }
+  if (outcome.timedOut) {
+    return {
+      success: false,
+      message: `Timeout: claudesynchro took longer than ${Math.round(options.timeoutMs / 60000)} min`,
+      stderr,
+    };
+  }
+  if (outcome.error) {
+    return { success: false, message: `Could not start claudesynchro: ${outcome.error.message}`, stderr };
+  }
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-    }, timeout);
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      stderr = (stderr + text).slice(-20000);
-      pending += text;
-      const lines = pending.split('\n');
-      pending = lines.pop() ?? '';
-      lines.filter((line) => line.trim()).forEach((line) => onLog?.(line));
-    });
-
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      resolve({ success: false, message: `Could not start claudesynchro: ${error.message}`, stderr });
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        resolve({ success: false, message: `Timeout: claudesynchro took longer than ${timeout / 60000} min`, stderr });
-        return;
-      }
-      const lastLine = stdout.trim().split('\n').pop() || '';
-      let parsed: ClaudesynchroJson | null = null;
-      try {
-        parsed = JSON.parse(lastLine) as ClaudesynchroJson;
-      } catch {
-        parsed = null;
-      }
-      const message = parsed?.message || `claudesynchro exited with code ${code}`;
-      if (code === 0 && parsed?.status === 'synced') {
-        resolve({ success: true, message, stdout: lastLine });
-      } else if (code === 3 || parsed?.status === 'skipped') {
-        resolve({ success: true, skipped: true, message: `Skipped: ${message}` });
-      } else {
-        resolve({ success: false, message, stdout: lastLine || undefined, stderr: stderr || undefined });
-      }
-    });
-  });
+  const lastLine = outcome.stdout.trim().split('\n').pop() || '';
+  let parsed: ClaudesynchroJson | null = null;
+  try {
+    parsed = JSON.parse(lastLine) as ClaudesynchroJson;
+  } catch {
+    parsed = null;
+  }
+  const message = parsed?.message || `claudesynchro exited with code ${outcome.code}`;
+  if (outcome.code === 0 && parsed?.status === 'synced') {
+    return { success: true, message, stdout: lastLine };
+  }
+  if (outcome.code === 3 || parsed?.status === 'skipped') {
+    return { success: true, skipped: true, message: `Skipped: ${message}` };
+  }
+  return { success: false, message, stdout: lastLine || undefined, stderr };
 }

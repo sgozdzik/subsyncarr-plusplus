@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diagnostics · Subsyncarr++</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="header-top">
+          <div>
+            <h1>🧬 Subsyncarr++</h1>
+            <p class="subtitle">Diagnostics: errors, environment and logs</p>
+          </div>
+          <nav id="mainNav" class="main-nav"></nav>
+        </div>
+      </header>
+
+      <section class="report-box">
+        <div>
+          <h2>Something not working?</h2>
+          <p class="muted">
+            Copy the debug report and paste it into your chat with Claude. It contains versions, CPU and memory,
+            settings (API keys masked), recent errors with their output, and the last 200 log lines.
+          </p>
+        </div>
+        <div class="report-actions">
+          <button id="copyReport" class="btn btn-primary">📋 Copy debug report</button>
+          <a class="btn btn-secondary" href="/api/diagnostics/report?download=1">⬇ Download</a>
+          <button id="refresh" class="btn btn-secondary">⟳ Refresh</button>
+        </div>
+      </section>
+
+      <div id="warnings"></div>
+
+      <div class="diag-grid">
+        <section>
+          <h2>App &amp; system</h2>
+          <dl id="system" class="facts"></dl>
+        </section>
+        <section>
+          <h2>Tools</h2>
+          <table id="tools" class="details-table"></table>
+          <h4>claudesynchro</h4>
+          <dl id="claudesynchro" class="facts"></dl>
+        </section>
+      </div>
+
+      <section>
+        <div class="section-header">
+          <h2>Recent errors</h2>
+          <span class="muted" id="failureCount"></span>
+        </div>
+        <div id="failures"></div>
+      </section>
+
+      <section>
+        <div class="section-header">
+          <h2>Auto-skipped (only run when picked in the Library)</h2>
+          <span class="muted" id="skippedCount"></span>
+        </div>
+        <div id="skipped"></div>
+      </section>
+
+      <section>
+        <h2>Schedule, queue and recent runs</h2>
+        <div id="runs"></div>
+      </section>
+
+      <section>
+        <div class="section-header">
+          <h2>Server log</h2>
+          <button id="copyLog" class="btn btn-secondary btn-sm">📋 Copy</button>
+        </div>
+        <pre id="serverLog" class="logs-content server-log"></pre>
+      </section>
+    </div>
+
+    <script src="/common.js"></script>
+    <script src="/diagnostics.js"></script>
+  </body>
+</html>

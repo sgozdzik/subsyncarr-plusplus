@@ -1,14 +1,20 @@
 import { basename, dirname, join } from 'path';
-import { execPromise, ProcessingResult } from './helpers';
 import { existsSync } from 'fs';
+import { EngineOptions, ProcessingResult, runEngineCommand } from './helpers';
 
-export async function generateAlassSubtitles(srtPath: string, videoPath: string): Promise<ProcessingResult> {
-  const directory = dirname(srtPath);
-  const srtBaseName = basename(srtPath, '.srt');
-  const outputPath = join(directory, `${srtBaseName}.alass.srt`);
+export function alassOutputPath(srtPath: string): string {
+  return join(dirname(srtPath), `${basename(srtPath, '.srt')}.alass.srt`);
+}
 
-  const exists = existsSync(outputPath);
-  if (exists) {
+export async function generateAlassSubtitles(
+  srtPath: string,
+  videoPath: string,
+  options: EngineOptions,
+): Promise<ProcessingResult> {
+  const outputPath = alassOutputPath(srtPath);
+
+  // Check if synced subtitle already exists
+  if (!options.force && existsSync(outputPath)) {
     return {
       success: true,
       message: `Skipping ${outputPath} - already processed`,
@@ -16,39 +22,5 @@ export async function generateAlassSubtitles(srtPath: string, videoPath: string)
     };
   }
 
-  try {
-    const command = `alass "${videoPath}" "${srtPath}" "${outputPath}"`;
-    console.log(`${new Date().toLocaleString()} Processing: ${command}`);
-    const { stdout, stderr } = await execPromise(command);
-    return {
-      success: true,
-      message: `Successfully processed: ${outputPath}`,
-      stdout: stdout || undefined,
-      stderr: stderr || undefined,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const isTimeout = errorMessage.includes('SIGTERM') || errorMessage.includes('timed out');
-
-    // Extract stdout/stderr from error if available
-    const execError = error as { stdout?: string; stderr?: string };
-    const stdout = execError.stdout || '';
-    const stderr = execError.stderr || '';
-
-    if (isTimeout) {
-      return {
-        success: false,
-        message: `Timeout: ${outputPath} took longer than allowed timeout`,
-        stdout: stdout || undefined,
-        stderr: stderr || undefined,
-      };
-    }
-
-    return {
-      success: false,
-      message: `Error processing ${outputPath}: ${errorMessage}`,
-      stdout: stdout || undefined,
-      stderr: stderr || undefined,
-    };
-  }
+  return runEngineCommand('alass', 'alass', [videoPath, srtPath, outputPath], outputPath, options);
 }

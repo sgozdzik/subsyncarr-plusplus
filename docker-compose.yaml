@@ -36,7 +36,7 @@ services:
       # --- claudesynchro (content-aware engine) ---
       - CLAUDESYNCHRO_LANGUAGES=pl # Subtitle languages to synchronise (others are skipped by this engine)
       - CLAUDESYNCHRO_GAP_FILL=english # Scenes missing from the subtitles: none | english | translate (needs OPENROUTER_API_KEY)
-      # - CLAUDESYNCHRO_TIMEOUT_MS=10800000 # 3 h per file (transcribing a long movie on a slow CPU takes a while)
+      # Timeouts (30 min per engine, 60 min for claudesynchro), daily run time and failure policy: Settings page in the UI
       # - WHISPER_MODEL=base # tiny | base | small; only used when a movie has no English subtitles
       # - CLAUDESYNCHRO_THREADS=4 # CPU threads for Whisper/embeddings (default: all cores)
       # - OPENROUTER_API_KEY=sk-or-... # Optional: translation gap fill, cloud transcription/embeddings

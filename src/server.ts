@@ -4,11 +4,15 @@ import { createServer } from 'http';
 import { ProcessingCoordinator } from './coordinator';
 import { StateManager } from './stateManager';
 import { join } from 'path';
+import { existsSync } from 'fs';
 import { getScanConfig } from './config';
-import cronstrue from 'cronstrue';
-import parseExpression from 'cron-parser';
 import { readFile } from 'fs/promises';
 import { claudesynchroReportPath } from './generateClaudesynchroSubtitles';
+import { Scheduler } from './scheduler';
+import { Library, isInsideScanPaths } from './library';
+import { collectDiagnostics, renderReport } from './diagnostics';
+import { SCHEDULE_TIMEZONE } from './settings';
+import { getEnabledEngines } from './engines';
 
 export class SubsyncarrPlusServer {
   private app = express();
@@ -19,6 +23,9 @@ export class SubsyncarrPlusServer {
   constructor(
     private coordinator: ProcessingCoordinator,
     private stateManager: StateManager,
+    private scheduler: Scheduler,
+    private library: Library,
+    private dbPath: string,
   ) {
     this.setupMiddleware();
     this.setupRoutes();
@@ -27,7 +34,8 @@ export class SubsyncarrPlusServer {
 
   private setupMiddleware() {
     this.app.use(express.json());
-    this.app.use(express.static(join(__dirname, '../public')));
+    // `extensions` lets /library, /settings and /diagnostics serve the matching .html pages.
+    this.app.use(express.static(join(__dirname, '../public'), { extensions: ['html'] }));
   }
 
   private setupRoutes() {
@@ -37,32 +45,13 @@ export class SubsyncarrPlusServer {
       const config = getScanConfig();
       const isDefaultPath = config.includePaths.length === 1 && config.includePaths[0] === '/scan_dir';
 
-      // Get cron schedule info
-      const cronSchedule = process.env.CRON_SCHEDULE || '0 0 * * *';
-      let scheduleDescription = '';
-      let nextRun = null;
-
-      if (cronSchedule !== 'disabled') {
-        try {
-          scheduleDescription = cronstrue.toString(cronSchedule);
-          const interval = parseExpression.parse(cronSchedule);
-          nextRun = interval.next().toDate().getTime();
-        } catch (error) {
-          console.error('Error parsing cron schedule:', error);
-          scheduleDescription = cronSchedule;
-        }
-      }
-
       res.json({
         paths: config.includePaths,
         excludePaths: config.excludePaths,
         isConfigured: !isDefaultPath,
-        schedule: {
-          enabled: cronSchedule !== 'disabled',
-          cron: cronSchedule,
-          description: scheduleDescription,
-          nextRun: nextRun,
-        },
+        schedule: this.scheduler.info(),
+        timezone: SCHEDULE_TIMEZONE,
+        engines: getEnabledEngines(),
       });
     });
 
@@ -74,6 +63,7 @@ export class SubsyncarrPlusServer {
         currentRun,
         files: currentRun ? this.stateManager.getFileResults(currentRun.id) : [],
         isRunning: this.coordinator.isRunning(),
+        queued: this.coordinator.getQueue().length,
       });
     });
 
@@ -131,31 +121,130 @@ export class SubsyncarrPlusServer {
       res.json({ logs });
     });
 
-    // Start a new run
+    // Start a new run (queued if another run is in progress)
     this.app.post('/api/run/start', async (req, res) => {
-      const { paths } = req.body;
+      const { paths } = req.body as { paths?: string[] };
       console.log(
         `[${new Date().toISOString()}] POST /api/run/start${paths ? ` (custom paths: ${paths.join(', ')})` : ' (default paths)'}`,
       );
-
       try {
-        if (this.coordinator.isRunning()) {
-          console.log(`[${new Date().toISOString()}] Request rejected: Run already in progress`);
-          return res.status(409).json({ error: 'A run is already in progress' });
-        }
-
-        const config = paths ? { includePaths: paths, excludePaths: [] } : undefined;
-
-        const runId = await this.coordinator.startRun(config);
-        res.json({ runId });
-      } catch (error) {
-        console.log(
-          `[${new Date().toISOString()}] Error starting run: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        const result = await this.coordinator.submit(
+          paths && paths.length > 0 ? { source: 'manual-paths', paths } : { source: 'manual' },
         );
-        res.status(500).json({
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        res.status(result.queued ? 202 : 200).json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
       }
+    });
+
+    // Run selected files from the Library. These also run engines that were auto-skipped after failures.
+    this.app.post('/api/run/files', async (req, res) => {
+      const { files, engines, force } = req.body as { files?: unknown; engines?: unknown; force?: unknown };
+      if (!Array.isArray(files) || files.length === 0 || !files.every((f) => typeof f === 'string')) {
+        return res.status(400).json({ error: 'files must be a non-empty list of paths' });
+      }
+      const outside = (files as string[]).filter((f) => !isInsideScanPaths(f) || !existsSync(f));
+      if (outside.length > 0) {
+        return res.status(400).json({ error: `Not a subtitle file in the scan paths: ${outside[0]}` });
+      }
+      console.log(`[${new Date().toISOString()}] POST /api/run/files (${files.length} file(s))`);
+      try {
+        const result = await this.coordinator.submit({
+          source: 'library',
+          files: files as string[],
+          engines: Array.isArray(engines) ? (engines as string[]) : undefined,
+          force: force === true,
+        });
+        res.status(result.queued ? 202 : 200).json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+      }
+    });
+
+    // Settings edited in the UI (schedule in Warsaw time, timeouts, failure policy)
+    this.app.get('/api/settings', (_req, res) => {
+      res.json({
+        ...this.stateManager.settings.snapshot(),
+        scheduleInfo: this.scheduler.info(),
+        timezone: SCHEDULE_TIMEZONE,
+        envCron: process.env.CRON_SCHEDULE || '0 0 * * *',
+      });
+    });
+
+    this.app.put('/api/settings', (req, res) => {
+      try {
+        this.stateManager.settings.update(req.body ?? {});
+        this.scheduler.apply();
+        this.library.invalidate();
+        console.log(`[${new Date().toISOString()}] Settings updated: ${JSON.stringify(req.body)}`);
+        res.json({
+          ...this.stateManager.settings.snapshot(),
+          scheduleInfo: this.scheduler.info(),
+          timezone: SCHEDULE_TIMEZONE,
+          envCron: process.env.CRON_SCHEDULE || '0 0 * * *',
+        });
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid settings' });
+      }
+    });
+
+    // Library: every subtitle file in the scan paths with per-engine status
+    this.app.get('/api/library', async (req, res) => {
+      try {
+        res.json(await this.library.get(req.query.refresh === '1'));
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Scan failed' });
+      }
+    });
+
+    this.app.get('/api/library/file', async (req, res) => {
+      const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+      if (!filePath || !isInsideScanPaths(filePath)) {
+        return res.status(400).json({ error: 'path must be inside the scan paths' });
+      }
+      const library = await this.library.get();
+      const db = this.stateManager.getDatabase();
+      let report: unknown = null;
+      try {
+        report = JSON.parse(await readFile(claudesynchroReportPath(filePath), 'utf8'));
+      } catch {
+        report = null;
+      }
+      res.json({
+        file: library.files.find((f) => f.path === filePath) ?? null,
+        engineStates: db.getEngineStatesForFile(filePath),
+        history: db.getFileHistory(filePath, 10).map((h) => ({ ...h, engines: JSON.parse(h.engines || '{}') })),
+        claudesynchroReport: report,
+        maxFailures: this.stateManager.settings.maxFailures(),
+      });
+    });
+
+    // Diagnostics for remote debugging
+    this.app.get('/api/diagnostics', async (_req, res) => {
+      res.json(
+        await collectDiagnostics({
+          stateManager: this.stateManager,
+          coordinator: this.coordinator,
+          scheduler: this.scheduler,
+          dbPath: this.dbPath,
+        }),
+      );
+    });
+
+    this.app.get('/api/diagnostics/report', async (req, res) => {
+      const report = renderReport(
+        await collectDiagnostics({
+          stateManager: this.stateManager,
+          coordinator: this.coordinator,
+          scheduler: this.scheduler,
+          dbPath: this.dbPath,
+        }),
+      );
+      if (req.query.download === '1') {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        res.setHeader('Content-Disposition', `attachment; filename="subsyncarr-debug-${stamp}.md"`);
+      }
+      res.type('text/plain; charset=utf-8').send(report);
     });
 
     // Stop current run
@@ -287,11 +376,13 @@ export class SubsyncarrPlusServer {
 
     this.stateManager.on('run:completed', (run) => {
       console.log(`[${new Date().toISOString()}] Broadcasting run:completed to ${this.clients.size} clients`);
+      this.library.invalidate();
       this.broadcast({ type: 'run:completed', data: run });
     });
 
     this.stateManager.on('run:cancelled', (run) => {
       console.log(`[${new Date().toISOString()}] Broadcasting run:cancelled to ${this.clients.size} clients`);
+      this.library.invalidate();
       this.broadcast({ type: 'run:cancelled', data: run });
     });
 
