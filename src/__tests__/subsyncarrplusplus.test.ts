@@ -4,7 +4,7 @@ import { join } from 'path';
 import { StateManager } from '../stateManager';
 import { Library } from '../library';
 import { getEnabledEngines, setEngineOverride } from '../engines';
-import { runProcess } from '../helpers';
+import { ensureEngineDirsOnPath, runProcess } from '../helpers';
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'sspp-'));
@@ -119,6 +119,27 @@ describe('library', () => {
     expect(byName['Movie (2024).txt'].engines.ffsubsync.status).toBe('n/a');
     expect(byName['Lonely.pl.srt'].video).toBeNull();
     state.close();
+  });
+});
+
+describe('ensureEngineDirsOnPath', () => {
+  const originalPath = process.env.PATH;
+  afterEach(() => {
+    process.env.PATH = originalPath;
+  });
+
+  it('restores engine folders missing from a PATH carried over from an old container', () => {
+    const venv = tempDir();
+    const optBin = tempDir();
+    process.env.PATH = '/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+    expect(ensureEngineDirsOnPath([venv, '/home/node/.local/bin', optBin, '/does/not/exist'])).toEqual([venv, optBin]);
+    expect(process.env.PATH).toBe(
+      `${venv}:${optBin}:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+    );
+    // Already present (also with a trailing slash): nothing changes.
+    process.env.PATH = `${venv}/:${optBin}:/usr/bin`;
+    expect(ensureEngineDirsOnPath([venv, optBin])).toEqual([]);
+    expect(process.env.PATH).toBe(`${venv}/:${optBin}:/usr/bin`);
   });
 });
 

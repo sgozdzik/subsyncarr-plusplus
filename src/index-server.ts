@@ -6,6 +6,7 @@ import { SubsyncarrPlusServer } from './server';
 import { getRetentionConfig } from './config';
 import { Scheduler } from './scheduler';
 import { Library } from './library';
+import { ensureEngineDirsOnPath } from './helpers';
 
 // Keep recent log lines for the Diagnostics page.
 captureConsole();
@@ -16,6 +17,13 @@ async function main() {
   const host = process.env.WEB_HOST || '127.0.0.1';
 
   console.log(`[${new Date().toISOString()}] Initializing Subsyncarr Plus Server...`);
+
+  const addedToPath = ensureEngineDirsOnPath();
+  if (addedToPath.length > 0) {
+    console.log(
+      `[${new Date().toISOString()}] PATH from the container settings was missing engine folders, added: ${addedToPath.join(', ')}`,
+    );
+  }
 
   const stateManager = new StateManager(dbPath);
   const engine = new ProcessingEngine();

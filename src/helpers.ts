@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import { delimiter } from 'path';
 
 export interface ProcessingResult {
   success: boolean;
@@ -29,6 +31,23 @@ export interface ProcessOutcome {
 
 const MAX_STDOUT = 5 * 1024 * 1024;
 const MAX_STDERR = 20000;
+
+/** Where the Docker image installs the engines (same order as PATH in the Dockerfile). */
+const ENGINE_DIRS = ['/opt/venv/ffsubsync/bin', '/opt/venv/autosubsync/bin', '/home/node/.local/bin', '/opt/bin'];
+
+/**
+ * Puts the engine folders back on PATH when the container's PATH does not have them. Portainer
+ * keeps the old image's PATH as a container variable when a container is re-created from a new
+ * image, which would otherwise hide ffsubsync, autosubsync and claudesynchro. Returns what was added.
+ */
+export function ensureEngineDirsOnPath(dirs: string[] = ENGINE_DIRS): string[] {
+  const current = (process.env.PATH || '').split(delimiter).map((dir) => dir.replace(/\/+$/, ''));
+  const missing = dirs.filter((dir) => existsSync(dir) && !current.includes(dir));
+  if (missing.length > 0) {
+    process.env.PATH = [...missing, ...(process.env.PATH ? [process.env.PATH] : [])].join(delimiter);
+  }
+  return missing;
+}
 
 /**
  * Runs an engine in its own process group, so a timeout or a Skip/Stop also ends
