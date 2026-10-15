@@ -363,10 +363,16 @@ export class SubsyncarrPlusDatabase {
     return results.map((r) => r.engine);
   }
 
-  recordEngineFailure(filePath: string, engine: string, maxFailures: number, details?: EngineRunDetails): void {
+  recordEngineFailure(
+    filePath: string,
+    engine: string,
+    maxFailures: number,
+    details?: EngineRunDetails,
+    countsTowardsLimit = true,
+  ): void {
     const existing = this.getEngineFailureTracking(filePath, engine);
     const now = Date.now();
-    const failures = (existing?.consecutive_failures ?? 0) + 1;
+    const failures = (existing?.consecutive_failures ?? 0) + (countsTowardsLimit ? 1 : 0);
 
     this.db
       .prepare(

@@ -134,6 +134,7 @@ export class StateManager extends EventEmitter {
       stderr?: string;
       skipped?: boolean;
       cancelled?: boolean;
+      setupError?: boolean;
     },
   ): void {
     const files = this.db.getFileResults(runId);
@@ -158,7 +159,8 @@ export class StateManager extends EventEmitter {
       } else if (result.success) {
         this.db.recordEngineSuccess(filePath, engine, details);
       } else {
-        this.db.recordEngineFailure(filePath, engine, this.settings.maxFailures(), details);
+        // A setup problem (e.g. no internet for the model download) is shown but not counted.
+        this.db.recordEngineFailure(filePath, engine, this.settings.maxFailures(), details, !result.setupError);
       }
 
       this.emitFileUpdate(runId, filePath);

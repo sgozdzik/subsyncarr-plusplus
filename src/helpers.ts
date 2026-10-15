@@ -10,6 +10,11 @@ export interface ProcessingResult {
   skipped?: boolean;
   /** Stopped by the user (Skip / Stop); does not count as a failure. */
   cancelled?: boolean;
+  /**
+   * The engine cannot run in this container at all (e.g. a model download failed). Not the file's
+   * fault: it does not count as a failure, and the engine is left out for the rest of the run.
+   */
+  setupError?: boolean;
 }
 
 export interface EngineOptions {

@@ -42,15 +42,16 @@ class LocalEmbedder:
 
     def __init__(self, settings: Settings, log: Log):
         import onnxruntime as ort
-        from huggingface_hub import hf_hub_download
         from tokenizers import Tokenizer
+
+        from .downloads import hf_file
 
         cache = settings.models_dir / "embeddings"
         repo = settings.embed_model_repo
         log(f"Loading embedding model {repo} ({settings.embed_model_file})")
-        tokenizer_path = hf_hub_download(repo, "tokenizer.json", cache_dir=str(cache))
-        model_path = hf_hub_download(repo, settings.embed_model_file, cache_dir=str(cache))
-        fallback = lambda: hf_hub_download(repo, "onnx/model.onnx", cache_dir=str(cache))
+        tokenizer_path = hf_file(repo, "tokenizer.json", cache)
+        model_path = hf_file(repo, settings.embed_model_file, cache)
+        fallback = lambda: hf_file(repo, "onnx/model.onnx", cache)
 
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.tokenizer.enable_truncation(max_length=128)

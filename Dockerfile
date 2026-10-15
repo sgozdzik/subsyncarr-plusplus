@@ -55,8 +55,10 @@ RUN npm run build && \
 ####################
 FROM base AS final
 
-# Runtime deps
+# Runtime deps. ca-certificates: Python (model downloads, OpenRouter) uses the system trust
+# store, unlike Node which bundles its own.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     ffmpeg \
     python3 \
     && rm -rf /var/lib/apt/lists/*
@@ -81,6 +83,11 @@ WORKDIR /app
 # Create volume for persistent storage of database (and claudesynchro models, transcripts, reports)
 RUN mkdir -p /app/data
 VOLUME "/app/data"
+
+# Shown in Diagnostics and debug reports (set by the GitHub workflow)
+ARG APP_COMMIT=dev
+ARG APP_BUILD_DATE=
+ENV APP_COMMIT=${APP_COMMIT} APP_BUILD_DATE=${APP_BUILD_DATE}
 
 # Runtime Env variables
 # Listen on all interfaces inside the container; the published port decides who can reach it.

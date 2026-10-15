@@ -33,6 +33,10 @@
         out.push(`Low disk space on ${disk.path}: ${formatBytes(disk.freeBytes)} free.`);
       }
     }
+    const hub = d.claudesynchro && d.claudesynchro.network && d.claudesynchro.network['huggingface.co'];
+    if (hub && !hub.startsWith('ok')) {
+      out.push(`claudesynchro cannot download its models from huggingface.co: ${hub}`);
+    }
     if (d.claudesynchro && d.claudesynchro.data_dir && !d.claudesynchro.data_dir.writable) {
       out.push(`claudesynchro cannot write to ${d.claudesynchro.data_dir.path} (models and caches go there).`);
     }
@@ -106,6 +110,17 @@
             ),
           ],
           [
+            'Network',
+            cs.network
+              ? Object.entries(cs.network)
+                  .map(
+                    ([host, status]) =>
+                      `<span class="${String(status).startsWith('ok') ? 'ok' : 'bad'}">${escapeHtml(host)}</span> ${escapeHtml(status)}`,
+                  )
+                  .join('<br>')
+              : '',
+          ],
+          [
             'Data',
             cs.data_dir
               ? `${escapeHtml(cs.data_dir.path)} · models ${cs.data_dir.models_mb} MB · ${cs.data_dir.transcripts_cached} cached transcript(s) · ${cs.data_dir.reports} report(s)`
@@ -130,7 +145,7 @@
           <div class="failure-head">
             <span class="pill pill-failed">${escapeHtml(f.engine)}</span>
             <span class="file-path" title="${escapeHtml(f.file)}">${escapeHtml(f.file.split('/').slice(-2).join('/'))}</span>
-            <span class="muted">${f.time ? formatDateTime(f.time) : ''} · ${f.failuresInARow}× in a row</span>
+            <span class="muted">${f.time ? formatDateTime(f.time) : ''} · ${f.failuresInARow ? `${f.failuresInARow}× in a row` : 'setup problem, not counted'}</span>
             <button class="btn btn-secondary btn-sm" data-reset="${escapeHtml(f.file)}" data-engine="${escapeHtml(f.engine)}">Reset</button>
           </div>
           <div>${escapeHtml(f.message || '')}</div>

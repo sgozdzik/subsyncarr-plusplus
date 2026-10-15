@@ -5,7 +5,8 @@
     claudesynchro transcribe --video Movie.mkv --output Movie.transcript.srt
     claudesynchro doctor [--json]
 
-Exit codes for `sync`: 0 written, 2 not written (low confidence), 3 skipped, 1 error.
+Exit codes for `sync`: 0 written, 2 not written (low confidence), 3 skipped, 1 error,
+4 setup error (cannot run in this environment, e.g. a model download failed; not the file's fault).
 With --json the last stdout line is a JSON object with status, message, output and report.
 """
 
@@ -39,6 +40,7 @@ def _apply_overrides(settings: Settings, args: argparse.Namespace) -> None:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
+    from .downloads import SetupError
     from .sync import Outcome, run
 
     settings = Settings()
@@ -53,6 +55,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
             reference_file=Path(args.reference_file) if args.reference_file else None,
             check_language=not args.any_language,
         )
+    except SetupError as err:
+        _log(traceback.format_exc())
+        outcome = Outcome("setup_error", str(err))
     except Exception as err:  # noqa: BLE001 - reported to the caller as JSON
         _log(traceback.format_exc())
         outcome = Outcome("error", f"{type(err).__name__}: {err}")
@@ -172,6 +177,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "transcripts_cached": len(list((settings.cache_dir / "transcripts").glob("*.json"))),
         "reports": len(list(settings.reports_dir.glob("*.json"))),
     }
+    from .downloads import check_https, tls_info
+
+    info["network"] = {"huggingface.co": check_https()}
+    info["tls"] = tls_info()
     effective = {k: (str(v) if isinstance(v, Path) else v) for k, v in dataclasses.asdict(settings).items()}
     if effective.get("openrouter_api_key"):
         effective["openrouter_api_key"] = "***" + str(effective["openrouter_api_key"])[-4:]

@@ -97,7 +97,7 @@ export function claudesynchroReportPath(subtitlePath: string): string {
 }
 
 interface ClaudesynchroJson {
-  status: 'synced' | 'low_confidence' | 'skipped' | 'error';
+  status: 'synced' | 'low_confidence' | 'skipped' | 'setup_error' | 'error';
   message: string;
   output: string | null;
   confidence: number | null;
@@ -157,6 +157,9 @@ export async function generateClaudesynchroSubtitles(
   }
   if (outcome.code === 3 || parsed?.status === 'skipped') {
     return { success: true, skipped: true, message: `Skipped: ${message}` };
+  }
+  if (outcome.code === 4 || parsed?.status === 'setup_error') {
+    return { success: false, setupError: true, message, stdout: lastLine || undefined, stderr };
   }
   return { success: false, message, stdout: lastLine || undefined, stderr };
 }

@@ -25,7 +25,7 @@ Log = Callable[[str], None]
 
 @dataclass
 class Outcome:
-    status: str  # "synced" | "low_confidence" | "skipped" | "error"
+    status: str  # "synced" | "low_confidence" | "skipped" | "setup_error" | "error"
     message: str
     output: str | None = None
     confidence: float | None = None
@@ -33,7 +33,7 @@ class Outcome:
 
     @property
     def exit_code(self) -> int:
-        return {"synced": 0, "low_confidence": 2, "skipped": 3}.get(self.status, 1)
+        return {"synced": 0, "low_confidence": 2, "skipped": 3, "setup_error": 4}.get(self.status, 1)
 
 
 def default_output_path(subtitle: Path, video: Path, lang: str | None) -> Path:

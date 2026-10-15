@@ -80,7 +80,29 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # amd64 only: the bundled alass binary is x86-64, and the target NAS is Intel.
-      - name: Build and push
+      # Build and test locally first, so a broken image never reaches the registry.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: subsyncarr-plusplus:test
+          build-args: |
+            APP_COMMIT=${{ github.sha }}
+            APP_BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          docker run --rm --entrypoint claudesynchro subsyncarr-plusplus:test --help
+          docker run --rm --entrypoint sh subsyncarr-plusplus:test -c 'ffsubsync --version && autosubsync --help > /dev/null && alass --version && ffmpeg -version | head -1'
+          # Model downloads need working HTTPS from Python (CA certificates in the image).
+          docker run --rm --entrypoint claudesynchro subsyncarr-plusplus:test doctor --json > doctor.json
+          python3 -c 'import json; s = json.load(open("doctor.json"))["network"]["huggingface.co"]; print("huggingface.co:", s); assert s.startswith("ok"), s'
+
+      - name: Push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -88,10 +110,7 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_COMMIT=${{ github.sha }}
+            APP_BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Smoke test the image
-        run: |
-          docker run --rm --entrypoint claudesynchro "${IMAGE}:sha-${GITHUB_SHA::7}" --help
-          docker run --rm --entrypoint sh "${IMAGE}:sha-${GITHUB_SHA::7}" -c 'ffsubsync --version && alass --version && ffmpeg -version | head -1'

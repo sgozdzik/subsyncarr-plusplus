@@ -35,6 +35,8 @@ const ENGINES: Record<
 export class ProcessingEngine extends EventEmitter {
   private cancelledFiles: Set<string> = new Set();
   private running: Map<string, AbortController> = new Map();
+  /** Engines that cannot run in this container, found during the current run (engine -> reason). */
+  private unavailable: Map<string, string> = new Map();
   private maxConcurrent: number;
   private logBuffer: string[] = [];
   private maxLogBufferSize: number;
@@ -67,6 +69,7 @@ export class ProcessingEngine extends EventEmitter {
   }
 
   async processRun(request: RunRequest, engines: string[]): Promise<void> {
+    this.unavailable.clear();
     let srtFiles: string[];
     if (request.files) {
       srtFiles = request.files.filter((file) => existsSync(file));
@@ -173,6 +176,21 @@ export class ProcessingEngine extends EventEmitter {
           continue; // Skip to next engine (allEnginesSkipped remains true)
         }
 
+        const unavailableReason = this.unavailable.get(engine);
+        if (unavailableReason) {
+          this.emit('file:engine_completed', {
+            srtPath,
+            engine,
+            result: {
+              success: false,
+              duration: 0,
+              message: `Not run: ${engine} cannot run in this container (${unavailableReason})`,
+              skipped: true,
+            },
+          });
+          continue;
+        }
+
         // Only claudesynchro reads non-SRT subtitles (e.g. MicroDVD/MPL2 .txt from Napiprojekt).
         if (engine !== 'claudesynchro' && extname(srtPath).toLowerCase() !== '.srt') {
           this.emit('file:engine_completed', {
@@ -229,6 +247,12 @@ export class ProcessingEngine extends EventEmitter {
 
         if (result.success) {
           anyEngineSucceeded = true;
+        }
+        if (result.setupError) {
+          this.unavailable.set(engine, result.message);
+          this.log(
+            `[${new Date().toISOString()}] ⚠ ${engine} cannot run in this container - leaving it out for the rest of this run. Fix the problem above (see Diagnostics), then run again.`,
+          );
         }
 
         this.emit('file:engine_completed', { srtPath, engine, result: { ...result, duration } });

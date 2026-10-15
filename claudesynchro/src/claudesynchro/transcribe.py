@@ -94,24 +94,25 @@ def transcribe_local(
     from faster_whisper import WhisperModel
     from faster_whisper.vad import get_speech_timestamps
 
+    from .downloads import whisper_model
+
     log(f"Loading Whisper model '{settings.whisper_model}' ({settings.whisper_compute_type}, {settings.cpu_threads} threads)")
+    model_path = whisper_model(settings.whisper_model, settings.models_dir / "whisper")
     try:
         model = WhisperModel(
-            settings.whisper_model,
+            model_path,
             device="cpu",
             compute_type=settings.whisper_compute_type,
             cpu_threads=settings.cpu_threads,
-            download_root=str(settings.models_dir / "whisper"),
         )
     except ValueError as err:
         # Older NAS CPUs (no AVX2) may not support int8; let CTranslate2 pick what works.
         log(f"Compute type {settings.whisper_compute_type} not supported ({err}); using the default")
         model = WhisperModel(
-            settings.whisper_model,
+            model_path,
             device="cpu",
             compute_type="default",
             cpu_threads=settings.cpu_threads,
-            download_root=str(settings.models_dir / "whisper"),
         )
     language = stream.language
     cues: list[Cue] = []
