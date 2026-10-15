@@ -1,10 +1,11 @@
-name: subsyncarr-plus
+name: subsyncarr-plusplus
 
 services:
-  subsyncarr-plus:
-    image: tomtomw123/subsyncarr-plus:latest
-    container_name: subsyncarr-plus
-    user: "1000:1000"
+  subsyncarr-plusplus:
+    # Replace <your-github-user> with the owner of your fork (lowercase).
+    image: ghcr.io/<your-github-user>/subsyncarr-plusplus:latest
+    container_name: subsyncarr-plusplus
+    user: '1000:1000'
     ports:
       - '3000:3000' # Web UI
     volumes:
@@ -14,14 +15,14 @@ services:
       - /path/to/movies:/movies
       - /path/to/tv:/tv
       - /path/to/anime:/anime
-      - db-data:/app/data # Persist database across restarts
+      - db-data:/app/data # Database + claudesynchro models, transcript cache and reports
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 768M      # Hard limit - increased for file-based logging and large runs
+          memory: 2G # claudesynchro peaks at ~0.9 GB (Whisper "base" + embeddings)
         reservations:
-          memory: 128M      # Minimum guaranteed memory
+          memory: 256M
     environment:
       - TZ=Etc/UTC # Replace with your own timezone
       - PUID=1000
@@ -30,16 +31,21 @@ services:
       - SCAN_PATHS=/movies,/tv # Remember to mount these as volumes. Must begin with /. Default valus is `/scan_dir`
       - EXCLUDE_PATHS=/movies/temp,/tv/downloads # Exclude certain sub-directories from the scan
       - MAX_CONCURRENT_SYNC_TASKS=1 # Defaults to 1 if not set. Higher number will consume more CPU but sync your library faster
-      - INCLUDE_ENGINES=ffsubsync,autosubsync # If not set, all engines are used by default
+      - INCLUDE_ENGINES=ffsubsync,alass,claudesynchro # If not set, all engines are used (ffsubsync,autosubsync,alass,claudesynchro)
+      - WEB_HOST=0.0.0.0
+      # --- claudesynchro (content-aware engine) ---
+      - CLAUDESYNCHRO_LANGUAGES=pl # Subtitle languages to synchronise (others are skipped by this engine)
+      - CLAUDESYNCHRO_GAP_FILL=english # Scenes missing from the subtitles: none | english | translate (needs OPENROUTER_API_KEY)
+      # - CLAUDESYNCHRO_TIMEOUT_MS=10800000 # 3 h per file (transcribing a long movie on a slow CPU takes a while)
+      # - WHISPER_MODEL=base # tiny | base | small; only used when a movie has no English subtitles
+      # - CLAUDESYNCHRO_THREADS=4 # CPU threads for Whisper/embeddings (default: all cores)
+      # - OPENROUTER_API_KEY=sk-or-... # Optional: translation gap fill, cloud transcription/embeddings
       # Memory configuration (optional):
       # - NODE_OPTIONS=--max-old-space-size=1024 # Increase if you experience OOM errors (default: 512)
       # Timeout configuration (optional - uncomment and adjust if needed):
-      # - SYNC_ENGINE_TIMEOUT_MS=1800000  # 30 minutes (default)
-      # - SYNC_ENGINE_TIMEOUT_MS=3600000  # 60 minutes for very large files
-      # - SYNC_ENGINE_TIMEOUT_MS=600000   # 10 minutes for smaller files
+      # - SYNC_ENGINE_TIMEOUT_MS=1800000  # 30 minutes (default) for ffsubsync/autosubsync/alass
       # Web UI configuration (optional):
       # - WEB_PORT=3000                   # Port for web UI (default: 3000)
-      # - WEB_HOST=127.0.0.1              # Host to bind to (default: 127.0.0.1, use 0.0.0.0 for all interfaces)
       # - DB_PATH=/app/data/subsyncarr-plus.db # SQLite database location (default: /app/data/subsyncarr-plus.db)
 
 volumes:

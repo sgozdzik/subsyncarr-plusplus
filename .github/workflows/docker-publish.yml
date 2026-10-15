@@ -1,17 +1,16 @@
-name: Build and Publish Docker Image
+name: Test, Build and Publish Docker Image
 
 on:
   push:
+    branches: [main]
     tags:
       - 'v*.*.*'
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  docker:
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,82 +18,80 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
+
+      - name: Node lint, build and tests
+        env:
+          HUSKY: '0'
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild better-sqlite3
+          npm run lint
+          npm run build
+          npm test
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: claudesynchro tests
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+          pip install './claudesynchro[dev]'
+          pytest claudesynchro/tests -q
+
+  docker:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # GHCR image names must be lowercase.
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/subsyncarr-plusplus" >> "$GITHUB_ENV"
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: tomtomw123/subsyncarr-plus
+          images: ${{ env.IMAGE }}
           tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+            type=sha,format=short
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
+      # amd64 only: the bundled alass binary is x86-64, and the target NAS is Intel.
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: Release ${{ github.ref_name }}
-          body: |
-            ## Docker Images
 
-            Pull the image using:
-            ```bash
-            docker pull tomtomw123/subsyncarr-plus:${{ github.ref_name }}
-            # or
-            docker pull tomtomw123/subsyncarr-plus:latest
-            ```
-
-            Example docker-compose.yaml:
-
-            ```
-            name: subsyncarr-plus
-
-            services:
-              subsyncarr-plus:
-                image: tomtomw123/subsyncarr-plus:latest
-                container_name: subsyncarr-plus
-                volumes:
-                  # Any path configured with SCAN_PATHS env var must be mounted
-                  # If no scan paths are specified, it defaults to scan `/scan_dir` like example below.
-                  # - ${MEDIA_PATH:-/path/to/your/media}:/scan_dir
-                  - /path/to/movies:/movies
-                  - /path/to/tv:/tv
-                  - /path/to/anime:/anime
-                restart: unless-stopped
-                environment:
-                  - TZ=${TZ:-UTC}
-                  - CRON_SCHEDULE=0 0 * * *  # Runs every day at midnight by default
-                  - SCAN_PATHS=/movies,/tv,/anime # Remember to mount these as volumes. Must begin with /. Default valus is `/scan_dir`
-                  - EXCLUDE_PATHS=/movies/temp,/tv/downloads # Exclude certain sub-directories from the scan
-                  - MAX_CONCURRENT_SYNC_TASKS=1
-                  - INCLUDE_ENGINES=ffsubsync,autosubsync # If not set, all engines are used by default
-            ```
-
-            Docker Hub URL: https://hub.docker.com/r/tomtomw123/subsyncarr-plus/tags
-          draft: false
-          prerelease: false
+      - name: Smoke test the image
+        run: |
+          docker run --rm --entrypoint claudesynchro "${IMAGE}:sha-${GITHUB_SHA::7}" --help
+          docker run --rm --entrypoint sh "${IMAGE}:sha-${GITHUB_SHA::7}" -c 'ffsubsync --version && alass --version && ffmpeg -version | head -1'

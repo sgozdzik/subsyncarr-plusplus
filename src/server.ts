@@ -7,6 +7,8 @@ import { join } from 'path';
 import { getScanConfig } from './config';
 import cronstrue from 'cronstrue';
 import parseExpression from 'cron-parser';
+import { readFile } from 'fs/promises';
+import { claudesynchroReportPath } from './generateClaudesynchroSubtitles';
 
 export class SubsyncarrPlusServer {
   private app = express();
@@ -204,6 +206,20 @@ export class SubsyncarrPlusServer {
       });
 
       res.json({ success: true });
+    });
+
+    // claudesynchro report for one subtitle file (cuts found, dropped/filled lines, confidence)
+    this.app.get('/api/claudesynchro/report', async (req, res) => {
+      const filePath = typeof req.query.file === 'string' ? req.query.file : '';
+      if (!filePath) {
+        return res.status(400).json({ error: 'file required' });
+      }
+      try {
+        const report = await readFile(claudesynchroReportPath(filePath), 'utf8');
+        res.type('application/json').send(report);
+      } catch {
+        res.status(404).json({ error: 'No claudesynchro report for this file yet' });
+      }
     });
 
     // Get skip status statistics

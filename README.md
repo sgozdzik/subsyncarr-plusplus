@@ -1,116 +1,145 @@
-# Subsyncarr Plus
+# Subsyncarr++
 
-An automated subtitle synchronization tool that runs as a Docker container. It continuously monitors your media directories for video files with out-of-sync subtitles and automatically synchronizes them using three sync engines (ffsubsync, autosubsync, and alass). This is a fork from the software [subsyncarr](https://github.com/johnpc/subsyncarr).
+A drop-in replacement for [Subsyncarr Plus](https://github.com/tomtomwillis/subsyncarr_plus) (itself a fork of [subsyncarr](https://github.com/johnpc/subsyncarr)) that adds a fourth engine, **claudesynchro**, which synchronises subtitles **by what is said, not only by when somebody speaks**.
 
-**Docker Hub:** [tomtomw123/subsyncarr-plus](https://hub.docker.com/r/tomtomw123/subsyncarr-plus)
+It was built for Polish subtitles, where the subtitle text has to stay (English does not tell you whether a speaker is male or female, Polish does), but it works for any language pair.
 
-## Features
+- Same container layout as Subsyncarr Plus: same env vars, port `3000`, `/app/data` volume and database. Switching is a change of image name.
+- ffsubsync, autosubsync and alass still run as before; claudesynchro writes its own `*.claudesynchro.srt` next to them.
 
-### Core Functionality
+## What claudesynchro does differently
 
-- **Automated Subtitle Synchronization** - Syncs subtitles for your entire media library or specific folders.
-- **Multiple Sync Engines** - Uses ffsubsync, autosubsync, and alass for maximum compatibility and success rate
-- **Scheduled Processing** - Runs on a configurable cron schedule (default: daily at midnight) and on container startup
-- **Parallel Processing** - Configure concurrent subtitle processing for faster library syncing
-- **Skip Already Synced Files** - Avoids re-processing files that already have synchronized subtitles or where an engine repeatedly fails.
-- **Processing History** - View past runs with detailed statistics, results, and logs
-- **Configuration Dashboard** - View current settings, monitored paths, and schedule status
-- **Configurable Timeouts** - Set per-engine timeout limits to prevent hung processes
-- **Log Management** - Configurable retention policies with automatic trimming and deletion
-- **Non Destructive** - Creates new files for each engine so no original files are altered. Allows easy switching between engines while watching content.
+ffsubsync, autosubsync and alass align **timing patterns**: where speech is in the audio (or where lines are in a reference file) versus where subtitle lines are. They never look at the text, so they cannot tell that a block of subtitles belongs to a scene that is not in your cut, and they always write a result, right or wrong.
 
-## Quick Start
+claudesynchro compares every subtitle line with a **reference that is known to match your video**, by meaning, across languages ("Gdzie jest Anna?" ≈ "Where is Anna?"):
 
-### Using Docker Compose (Recommended)
+1. **Reference**, best first: an English (or other) text track embedded in the video → external subtitles next to the video (checked against the audio first) → a Whisper transcript of the audio (local, cached).
+2. **Matching**: a small multilingual sentence-embedding model scores every pair of lines; names and numbers count extra; generic lines ("Yes.", "Sorry.") count little.
+3. **Timeline**: the best chain of matches is split wherever the time offset jumps. Each jump is a cut, an ad break or an extended scene; frame-rate differences (23.976 / 24 / 25 / 29.97) are detected.
+4. **Cuts are resolved line by line**:
+   - **subtitles longer than the video** (subtitles for an extended cut, TV edit with trimmed scenes) → the lines of the missing scenes are **dropped**;
+   - **video longer than the subtitles** (extended edition, commercial breaks) → the extra scenes are **left empty, filled with the English lines, or translated** by an LLM using the surrounding Polish lines for grammatical gender and names.
+5. **Confidence**: every result gets a score and a report (cuts, dropped and filled lines). Below `CLAUDESYNCHRO_MIN_CONFIDENCE` nothing is written, so a wrong subtitle file (another episode, another film) does not produce a broken `.srt`.
 
-1. **Create a docker-compose.yaml file** with the following content:
+Your original subtitle text is never changed; only timing is, plus optional filled-in lines.
 
-```yaml
-name: subsyncarr-plus
+### How it compares
 
-services:
-  subsyncarr-plus:
-    image: tomtomw123/subsyncarr-plus:latest
-    container_name: subsyncarr-plus
-    user: '1000:10'
-    ports:
-      - '3000:3000' # Web UI
-    volumes:
-      # Mount your media directories
-      - /path/to/movies:/movies
-      - /path/to/tv:/tv
-      - /path/to/anime:/anime
-      - ./data:/app/data # Persist database across restarts
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 768M # Hard limit
-        reservations:
-          memory: 128M # Minimum guaranteed memory
-    environment:
-      - TZ=Etc/UTC # Replace with your own timezone
-      - PUID=1000
-      - PGID=10
-      - CRON_SCHEDULE=0 0 * * * # Runs every day at midnight by default
-      - SCAN_PATHS=/movies,/tv # Comma-separated paths to scan
-      - EXCLUDE_PATHS=/movies/temp,/tv/downloads # Optional: exclude directories
-      - MAX_CONCURRENT_SYNC_TASKS=1 # Number of parallel processing tasks
-      - INCLUDE_ENGINES=ffsubsync,autosubsync,alass # Engines to use
+Synthetic benchmark (real English/Polish sentence pairs from Tatoeba, ~1,100-line "films", ground truth known; alass given the reference as a subtitle file), share of lines placed within 0.5 s:
+
+| Scenario                                                    | alass                      | claudesynchro                           |
+| ----------------------------------------------------------- | -------------------------- | --------------------------------------- |
+| Offset, frame rate 25↔23.976, silent ad breaks             | 100 %                      | 100 %                                   |
+| Video extended (+3 scenes)                                  | 99.9–100 %                 | 100 %, extra scenes filled with English |
+| Subtitles extended (+3 scenes)                              | 41–60 % (no lines dropped) | 100 %, 100 % of extra lines dropped     |
+| TV edit with 2–4 lines trimmed from scenes                  | 87–97 %                    | 99.9–100 %                              |
+| Noisy transcript reference, subtitles extended + frame rate | 36–78 %                    | 99.7–100 %                              |
+| Subtitles for a different film                              | writes garbage             | refuses (no output)                     |
+
+Real audio ([Tears of Steel](https://mango.blender.org), CC-BY, with its Polish community subtitles), "TV version" with a scene cut out, a 90 s ad break and PAL speed-up (24→25 fps), and "extended" version vs. shortened subtitles:
+
+| Scenario                                              | alass (audio, as used by Subsyncarr) | claudesynchro                                          |
+| ----------------------------------------------------- | ------------------------------------ | ------------------------------------------------------ |
+| TV version, embedded English track                    | 0 / 67 lines within 0.5 s            | **67 / 67**, 9 / 9 lines of the cut scene dropped      |
+| TV version, no English subtitles (Whisper `base`)     | 0 / 67                               | **63 / 67**, 7 / 9 dropped                             |
+| Extended video, embedded English track                | 0 / 67                               | **67 / 67**, missing scene filled with 9 English lines |
+| Extended video, no English subtitles (Whisper `base`) | 0 / 67                               | **64 / 67** (rest within 0.6 s)                        |
+
+Tears of Steel is short and music-heavy, which is hard for audio-pattern engines; on dialogue-heavy films without cuts alass usually does well. Where claudesynchro gains most is cuts, extended editions and ad breaks, and knowing when it got it right.
+
+**Cost** (measured with 4 threads): peak memory is ~0.8 GB with an embedded/external English track and ~0.9 GB when Whisper runs, so a 2 GB container limit leaves room for the Node service. With an English track a film takes seconds. Without one, the audio is transcribed once (cached): a 12-minute film took 5 s on an Apple M5; on a 4-core NAS Celeron my estimate (not yet measured) is 10–30 minutes per 2-hour film with the `base` model.
+
+## Switching from Subsyncarr Plus (Portainer / QNAP)
+
+1. In your stack, change the image to `ghcr.io/<your-github-user>/subsyncarr-plusplus:latest`.
+2. If you set `INCLUDE_ENGINES`, add `claudesynchro` to it (if you do not set it, all four engines run).
+3. Raise the memory limit to **2G** (claudesynchro peaks at ~0.9 GB).
+4. Optionally set `CLAUDESYNCHRO_LANGUAGES` (default `pl`) and `CLAUDESYNCHRO_GAP_FILL` (default `english`).
+5. Redeploy. History, database and logs in `/app/data` are kept. Models (~300 MB) are downloaded into `/app/data/claudesynchro/models` on first use.
+
+The image is `linux/amd64` (Intel/AMD NAS). It is built by GitHub Actions on every push to `main` (see `.github/workflows/docker-publish.yml`).
+
+## claudesynchro settings
+
+| Variable                                 | Default                        | Description                                                                                                                                                            |
+| ---------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUDESYNCHRO_LANGUAGES`                | `pl`                           | Subtitle languages to synchronise (ISO 639-1, comma-separated). Other subtitles are skipped by this engine without starting it. Untagged files are checked by content. |
+| `CLAUDESYNCHRO_GAP_FILL`                 | `english`                      | Scenes that exist in the video but not in the subtitles: `none`, `english` (copy the reference lines) or `translate` (LLM via OpenRouter, needs `OPENROUTER_API_KEY`). |
+| `CLAUDESYNCHRO_GAP_FILL_PREFIX`          | _(empty)_                      | Text put in front of filled lines, e.g. `[EN] `.                                                                                                                       |
+| `CLAUDESYNCHRO_GAP_FILL_FROM_TRANSCRIPT` | `false`                        | Also fill when the reference is a Whisper transcript. Off by default: a "scene" missing from the subtitles may be an ad break, and you would get the ad's speech.      |
+| `CLAUDESYNCHRO_MIN_CONFIDENCE`           | `0.5`                          | Do not write a result below this confidence (0–1).                                                                                                                     |
+| `CLAUDESYNCHRO_REFERENCE`                | `embedded,external,transcript` | Reference sources, in order of preference. Remove `transcript` to never run Whisper.                                                                                   |
+| `CLAUDESYNCHRO_REFERENCE_LANGUAGES`      | `en,*`                         | Preferred reference languages; `*` allows any other language afterwards.                                                                                               |
+| `CLAUDESYNCHRO_VERIFY_EXTERNAL`          | `true`                         | Check external reference subtitles against the speech in the audio (in 10-minute windows) before trusting them.                                                        |
+| `CLAUDESYNCHRO_TIMEOUT_MS`               | `10800000`                     | Timeout per file (3 h; transcription on a slow CPU takes a while).                                                                                                     |
+| `WHISPER_MODEL`                          | `base`                         | `tiny`, `base`, `small`, … Only used when there is no usable subtitle reference. `small` is more accurate and ~2.5× slower.                                            |
+| `WHISPER_COMPUTE_TYPE`                   | `int8`                         | CTranslate2 compute type; falls back automatically if the CPU does not support it.                                                                                     |
+| `CLAUDESYNCHRO_THREADS`                  | _(all cores)_                  | CPU threads for Whisper and embeddings. Set e.g. `2` to leave room for Plex.                                                                                           |
+| `CLAUDESYNCHRO_TRANSCRIBER`              | `local`                        | `local` or `openrouter` (Whisper in the cloud, ~$0.006/min, nothing heavy on the NAS).                                                                                 |
+| `CLAUDESYNCHRO_EMBEDDINGS`               | `local`                        | `local` or `openrouter`.                                                                                                                                               |
+| `OPENROUTER_API_KEY`                     | _(none)_                       | Only needed for `translate`, or the OpenRouter backends.                                                                                                               |
+| `OPENROUTER_MODEL`                       | `anthropic/claude-haiku-5.5`   | LLM for `translate`.                                                                                                                                                   |
+| `OPENROUTER_TRANSCRIBE_MODEL`            | `openai/whisper-large-v3`      | Speech-to-text model for `CLAUDESYNCHRO_TRANSCRIBER=openrouter`.                                                                                                       |
+| `OPENROUTER_EMBED_MODEL`                 | `baai/bge-m3`                  | Embedding model for `CLAUDESYNCHRO_EMBEDDINGS=openrouter`.                                                                                                             |
+| `CLAUDESYNCHRO_DATA_DIR`                 | `/app/data/claudesynchro`      | Models, transcript cache and reports.                                                                                                                                  |
+
+With the defaults nothing leaves your NAS and no LLM is used: the "AI" is a 120 MB multilingual sentence model and, when needed, Whisper.
+
+### Files
+
+```
+Movie (2024)/
+├── Movie (2024).mkv
+├── Movie (2024).pl.srt                  # your subtitles (never modified)
+├── Movie (2024).pl.claudesynchro.srt    # claudesynchro result
+├── Movie (2024).pl.alass.srt            # other engines, as before
+└── Movie (2024).txt                     # Napiprojekt MicroDVD/MPL2 .txt is supported too → Movie (2024).pl.claudesynchro.srt
 ```
 
-2. **Update the configuration:**
+Supported subtitle input: SRT, ASS/SSA, WebVTT, MicroDVD, MPL2 and TMPlayer, in UTF-8/16, CP1250 or ISO-8859-2 (detected automatically). Output is always UTF-8 SRT.
 
-   - Replace `/path/to/movies`, `/path/to/tv`, etc. with your actual media paths
-   - Update `TZ` to your timezone (e.g., `America/New_York`, `Europe/London`)
-   - Update `PUID` and `PGID` to match your user (run `id` command to find these)
-   - Adjust `SCAN_PATHS` to match your mounted volumes
+In the web UI, every file shows claudesynchro's summary (confidence, reference, frame rate, cuts, dropped/filled lines) with a link to the full report (`/api/claudesynchro/report?file=…`), which also lists the dropped lines.
 
-3. **Start the container:**
+### Command line
+
+The engine can be run on its own, inside the container or anywhere Python 3.10+ and ffmpeg are installed:
 
 ```bash
-docker compose up -d
+docker exec -it subsyncarr-plusplus claudesynchro sync \
+  --video "/movies/Movie (2024)/Movie (2024).mkv" \
+  --subtitle "/movies/Movie (2024)/Movie (2024).pl.srt"
+
+claudesynchro probe --video movie.mkv                       # streams and reference candidates
+claudesynchro transcribe --video movie.mkv --output t.srt   # Whisper transcript as SRT
 ```
 
-4. **Access the Web UI:**
+Exit codes: `0` written, `2` not written (low confidence), `3` skipped, `1` error. `--json` prints a machine-readable result.
 
-Open your browser to [http://localhost:3000](http://localhost:3000) or whatever port you've mapped to inside docker.
-
-### Using Docker Run
+### Development
 
 ```bash
-docker run -d \
-  --name subsyncarr-plus \
-  --user 1000:10 \
-  -p 3000:3000 \
-  -v /path/to/movies:/movies \
-  -v /path/to/tv:/tv \
-  -v ./data:/app/data \
-  -e TZ=Etc/UTC \
-  -e PUID=1000 \
-  -e PGID=10 \
-  -e CRON_SCHEDULE="0 0 * * *" \
-  -e SCAN_PATHS=/movies,/tv \
-  -e MAX_CONCURRENT_SYNC_TASKS=1 \
-  tomtomw123/subsyncarr-plus:latest
+npm install && npm run build && npm test          # Node service (use Node 22)
+cd claudesynchro && pip install -e '.[dev]' && pytest
 ```
 
-## Configuration
+## General configuration
+
+All Subsyncarr Plus settings work unchanged. claudesynchro's own settings are listed [above](#claudesynchro-settings).
 
 ### Core Configuration
 
-| Variable                    | Default                       | Description                                                                      |
-| --------------------------- | ----------------------------- | -------------------------------------------------------------------------------- |
-| `SCAN_PATHS`                | `/scan_dir`                   | Comma-separated directories to scan for SRT files (must be mounted as volumes)   |
-| `EXCLUDE_PATHS`             | _(none)_                      | Comma-separated directories to exclude from scanning                             |
-| `CRON_SCHEDULE`             | `0 0 * * *`                   | Cron expression for sync schedule (daily at midnight), or `disabled` to turn off |
-| `MAX_CONCURRENT_SYNC_TASKS` | `1`                           | Number of subtitle files to process in parallel (higher = faster but more CPU)   |
-| `INCLUDE_ENGINES`           | `ffsubsync,autosubsync,alass` | Which sync engines to use (comma-separated)                                      |
-| `SYNC_ENGINE_TIMEOUT_MS`    | `1800000`                     | Timeout for each sync engine in milliseconds (30 min default)                    |
-| `NODE_OPTIONS`             | `--max-old-space-size=512`    | Node.js options, used here to set memory limit (in MB)                           |
-| `TZ`                        | _(system)_                    | Timezone for logging and cron scheduling (e.g., `America/New_York`)              |
-| `PUID`                      | `1000`                        | User ID for file permissions (run `id -u` to find yours)                         |
-| `PGID`                      | `1000`                        | Group ID for file permissions (run `id -g` to find yours)                        |
+| Variable                    | Default                                     | Description                                                                      |
+| --------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
+| `SCAN_PATHS`                | `/scan_dir`                                 | Comma-separated directories to scan for SRT files (must be mounted as volumes)   |
+| `EXCLUDE_PATHS`             | _(none)_                                    | Comma-separated directories to exclude from scanning                             |
+| `CRON_SCHEDULE`             | `0 0 * * *`                                 | Cron expression for sync schedule (daily at midnight), or `disabled` to turn off |
+| `MAX_CONCURRENT_SYNC_TASKS` | `1`                                         | Number of subtitle files to process in parallel (higher = faster but more CPU)   |
+| `INCLUDE_ENGINES`           | `ffsubsync,autosubsync,alass,claudesynchro` | Which sync engines to use (comma-separated)                                      |
+| `SYNC_ENGINE_TIMEOUT_MS`    | `1800000`                                   | Timeout for each sync engine in milliseconds (30 min default)                    |
+| `NODE_OPTIONS`              | `--max-old-space-size=512`                  | Node.js options, used here to set memory limit (in MB)                           |
+| `TZ`                        | _(system)_                                  | Timezone for logging and cron scheduling (e.g., `America/New_York`)              |
+| `PUID`                      | `1000`                                      | User ID for file permissions (run `id -u` to find yours)                         |
+| `PGID`                      | `1000`                                      | Group ID for file permissions (run `id -g` to find yours)                        |
 
 ### Database & Log Configuration
 
@@ -264,7 +293,7 @@ If the container is being killed due to OOM (Out Of Memory):
 2. Increase memory limit in `NODE_OPTIONS` (e.g., `--max-old-space-size=1024`)
 3. Increase memory limit in docker-compose.yaml
 4. Reduce `SYNC_ENGINE_TIMEOUT_MS` for faster timeouts
-4. Exclude large files or problematic directories with `EXCLUDE_PATHS`
+5. Exclude large files or problematic directories with `EXCLUDE_PATHS`
 
 ### Files Not Being Processed
 
@@ -275,20 +304,12 @@ Check that:
 3. Files haven't already been synced (check for `.ffsubsync.srt` files)
 4. Files aren't being auto-skipped due to repeated failures (check skip status in Web UI)
 
-## Docker Hub
-
-Pull the latest image:
-
-```bash
-docker pull tomtomw123/subsyncarr-plus:latest
-```
-
-**Docker Hub Repository:** [tomtomw123/subsyncarr-plus](https://hub.docker.com/r/tomtomw123/subsyncarr-plus)
-
 ## Contributing
 
-Issues and pull requests are welcome! Please report bugs or suggest features via GitHub Issues.
+Issues and pull requests are welcome.
 
-## License
+## Credits
 
-See LICENSE file for details.
+- [subsyncarr](https://github.com/johnpc/subsyncarr) by johnpc and [Subsyncarr Plus](https://github.com/tomtomwillis/subsyncarr_plus) by tomtomwillis, which this builds on.
+- [ffsubsync](https://github.com/smacke/ffsubsync), [autosubsync](https://github.com/oseiskar/autosubsync), [alass](https://github.com/kaegi/alass).
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and [paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2) (ONNX export by [Xenova](https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2)) used by claudesynchro.

@@ -455,7 +455,7 @@ class SubsyncarrPlusClient {
           <div class="engine-status">
             ${file.current_engine ? `⚙️ Working on ${file.current_engine}` : 'Starting...'}
           </div>
-          ${this.renderEngineResults(engines)}
+          ${this.renderEngineResults(engines, file.file_path)}
         </div>
       `;
       })
@@ -470,7 +470,7 @@ class SubsyncarrPlusClient {
         return `
         <div class="file-card ${file.status}">
           <div class="file-name">${this.basename(file.file_path)}</div>
-          ${this.renderEngineResults(engines)}
+          ${this.renderEngineResults(engines, file.file_path)}
         </div>
       `;
       })
@@ -480,21 +480,37 @@ class SubsyncarrPlusClient {
       completedHtml || '<p class="no-data">No completed files yet</p>';
   }
 
-  renderEngineResults(engines) {
+  renderEngineResults(engines, filePath) {
     return Object.entries(engines)
       .map(([name, result]) => {
-        const icon = result.success ? '✓' : '✗';
+        const icon = result.skipped ? '⊘' : result.success ? '✓' : '✗';
         const className = result.success ? 'success' : 'error';
         const duration = (result.duration / 1000).toFixed(1);
+        // claudesynchro explains what it did (confidence, cuts, dropped/filled lines) - show it.
+        const details =
+          name === 'claudesynchro' && result.message
+            ? `<div class="engine-details">${this.escapeHtml(result.message)}${
+                filePath && !result.skipped
+                  ? ` · <a href="/api/claudesynchro/report?file=${encodeURIComponent(filePath)}" target="_blank">report</a>`
+                  : ''
+              }</div>`
+            : '';
 
         return `
-        <div class="engine-result ${className}">
+        <div class="engine-result ${className}" title="${this.escapeHtml(result.message || '')}">
           <span>${icon} ${name}</span>
           <span class="duration">${duration}s</span>
-        </div>
+        </div>${details}
       `;
       })
       .join('');
+  }
+
+  escapeHtml(text) {
+    return String(text).replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+    );
   }
 
   calculateEngineStats(files) {
@@ -502,6 +518,7 @@ class SubsyncarrPlusClient {
       ffsubsync: { pass: 0, fail: 0 },
       autosubsync: { pass: 0, fail: 0 },
       alass: { pass: 0, fail: 0 },
+      claudesynchro: { pass: 0, fail: 0 },
     };
 
     files.forEach((file) => {
@@ -571,6 +588,7 @@ class SubsyncarrPlusClient {
           ${this.renderEngineCell(engineStats.ffsubsync)}
           ${this.renderEngineCell(engineStats.autosubsync)}
           ${this.renderEngineCell(engineStats.alass)}
+          ${this.renderEngineCell(engineStats.claudesynchro)}
           <td>${duration}</td>
           <td>
             <button class="btn-view-logs" onclick="client.viewLogs('${run.id}')">
@@ -583,7 +601,7 @@ class SubsyncarrPlusClient {
       .join('');
 
     document.getElementById('historyBody').innerHTML =
-      html || '<tr><td colspan="11" class="no-data">No runs yet</td></tr>';
+      html || '<tr><td colspan="12" class="no-data">No runs yet</td></tr>';
   }
 
   basename(path) {
@@ -596,7 +614,10 @@ class SubsyncarrPlusClient {
     let name = filePath.split('/').pop();
 
     // Remove file extension (.srt, .eng.srt, .eng.sdh.srt, etc.)
-    name = name.replace(/\.(eng|spa|fre|ger|ita|por|jpn|kor|chi|rus|ara|hin|pol|dut|swe|nor|dan|fin|tur|heb|tha|vie|ind|msa|hun|ces|slk|ron|bul|ukr|ell|srp|hrv|slv|lit|lav|est|cat|eus|glg|sdh)?\.(srt|sub|ass|ssa|vtt)$/i, '');
+    name = name.replace(
+      /\.(eng|spa|fre|ger|ita|por|jpn|kor|chi|rus|ara|hin|pol|dut|swe|nor|dan|fin|tur|heb|tha|vie|ind|msa|hun|ces|slk|ron|bul|ukr|ell|srp|hrv|slv|lit|lav|est|cat|eus|glg|sdh)?\.(srt|sub|ass|ssa|vtt)$/i,
+      '',
+    );
     name = name.replace(/\.(srt|sub|ass|ssa|vtt)$/i, '');
 
     // Try to extract just the title with year

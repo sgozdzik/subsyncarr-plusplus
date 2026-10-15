@@ -1,10 +1,13 @@
 import EventEmitter from 'events';
+import { extname } from 'path';
 import { ScanConfig, getScanConfig } from './config';
 import { findAllSrtFiles } from './findAllSrtFiles';
 import { findMatchingVideoFile } from './findMatchingVideoFile';
 import { generateFfsubsyncSubtitles } from './generateFfsubsyncSubtitles';
 import { generateAutosubsyncSubtitles } from './generateAutosubsyncSubtitles';
 import { generateAlassSubtitles } from './generateAlassSubtitles';
+import { generateClaudesynchroSubtitles } from './generateClaudesynchroSubtitles';
+import { getEnabledEngines } from './engines';
 import { StateManager } from './stateManager';
 
 export class ProcessingEngine extends EventEmitter {
@@ -18,7 +21,7 @@ export class ProcessingEngine extends EventEmitter {
   constructor() {
     super();
     this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_SYNC_TASKS || '1', 10);
-    this.enabledEngines = process.env.INCLUDE_ENGINES?.split(',') || ['ffsubsync', 'autosubsync', 'alass'];
+    this.enabledEngines = getEnabledEngines();
     this.maxLogBufferSize = parseInt(process.env.LOG_BUFFER_SIZE || '1000', 10);
   }
 
@@ -117,6 +120,16 @@ export class ProcessingEngine extends EventEmitter {
         continue; // Skip to next engine (allEnginesSkipped remains true)
       }
 
+      // Only claudesynchro reads non-SRT subtitles (e.g. MicroDVD/MPL2 .txt from Napiprojekt).
+      if (engine !== 'claudesynchro' && extname(srtPath).toLowerCase() !== '.srt') {
+        this.emit('file:engine_completed', {
+          srtPath,
+          engine,
+          result: { success: true, duration: 0, message: `${engine} only supports .srt files`, skipped: true },
+        });
+        continue;
+      }
+
       this.log(`[${new Date().toISOString()}] Starting ${engine} for: ${fileName}`);
       this.emit('file:engine_started', { srtPath, engine });
 
@@ -134,15 +147,20 @@ export class ProcessingEngine extends EventEmitter {
           case 'alass':
             result = await generateAlassSubtitles(srtPath, videoPath);
             break;
+          case 'claudesynchro':
+            result = await generateClaudesynchroSubtitles(srtPath, videoPath, (line) =>
+              this.log(`[${new Date().toISOString()}]   claudesynchro ${line}`),
+            );
+            break;
           default:
             continue;
         }
 
         const duration = Date.now() - startTime;
 
-        // If this engine was skipped (already processed), log and continue
+        // If this engine was skipped (already processed, wrong language, ...), log and continue
         if (result.skipped) {
-          this.log(`[${new Date().toISOString()}] ⊘ ${engine} skipped (already processed): ${fileName}`);
+          this.log(`[${new Date().toISOString()}] ⊘ ${engine} skipped: ${result.message}`);
           this.emit('file:engine_completed', {
             srtPath,
             engine,

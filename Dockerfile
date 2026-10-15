@@ -1,5 +1,6 @@
-# Use Node 22 LTS as base image
-FROM node:22-alpine3.23 AS base
+# Node 22 LTS on Debian (glibc). The claudesynchro engine needs onnxruntime and CTranslate2
+# (faster-whisper), which have no wheels for Alpine/musl.
+FROM node:22-bookworm-slim AS base
 
 ###############
 # BUILD STAGE #
@@ -7,21 +8,23 @@ FROM node:22-alpine3.23 AS base
 FROM base AS builder
 
 # Build deps
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
     python3-dev \
-    py3-pip \
-    py3-virtualenv \
-    gcc \
-    g++ \
-    make \
-    musl-dev \
-    shadow
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install ffsubsync and autosubsync into custom venvs since pipx doesn't work properly over build stages
+# Install every Python engine into its own venv
 RUN python3 -m venv /opt/venv/ffsubsync && \
     python3 -m venv /opt/venv/autosubsync && \
+    python3 -m venv /opt/venv/claudesynchro && \
     /opt/venv/ffsubsync/bin/pip install --no-cache-dir --no-compile ffsubsync "setuptools<70" && \
     /opt/venv/autosubsync/bin/pip install --no-cache-dir --no-compile autosubsync "setuptools<70"
+
+COPY claudesynchro /tmp/claudesynchro
+RUN /opt/venv/claudesynchro/bin/pip install --no-cache-dir /tmp/claudesynchro && \
+    /opt/venv/claudesynchro/bin/claudesynchro --help > /dev/null
 
 # Set group and user id to 1000 in case node ever decides to change it
 ENV PUID=1000
@@ -53,10 +56,10 @@ RUN npm run build && \
 FROM base AS final
 
 # Runtime deps
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     python3 \
-    shadow
+    && rm -rf /var/lib/apt/lists/*
 
 # Same user as build stage
 ENV PUID=1000
@@ -65,22 +68,26 @@ RUN groupmod -g ${PGID} node && \
     usermod -u ${PUID} -g ${PGID} node && \
     chown -R node:node /home/node
 
-USER node
-WORKDIR /app
-
 # Copy app, python venv installs and bin
 COPY --from=builder --chown=node:node /app /app
 COPY --from=builder --chown=node:node /opt/venv /opt/venv
 COPY --chown=node:node bin/* /home/node/.local/bin/
+# Only the claudesynchro command goes on PATH, not its venv (which would shadow python3).
+RUN mkdir -p /opt/bin && ln -s /opt/venv/claudesynchro/bin/claudesynchro /opt/bin/claudesynchro
 
-# Create volume for persistent storage of database
+USER node
+WORKDIR /app
+
+# Create volume for persistent storage of database (and claudesynchro models, transcripts, reports)
 RUN mkdir -p /app/data
 VOLUME "/app/data"
 
 # Runtime Env variables
 ENV CRON_SCHEDULE="0 0 * * *"
 ENV NODE_OPTIONS="--max-old-space-size=512"
-ENV PATH="/opt/venv/ffsubsync/bin:/opt/venv/autosubsync/bin:/home/node/.local/bin/:$PATH"
+ENV CLAUDESYNCHRO_DATA_DIR="/app/data/claudesynchro"
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV PATH="/opt/venv/ffsubsync/bin:/opt/venv/autosubsync/bin:/home/node/.local/bin/:/opt/bin:$PATH"
 
 EXPOSE 3000
 
